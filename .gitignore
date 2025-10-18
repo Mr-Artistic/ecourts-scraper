@@ -1,0 +1,25 @@
+# Ignore Python files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+
+# Ignore virtual environment and sensitive directories
+.venv/
+.streamlit/
+.backups/
+outputs/
+
+# Ignore VS Code settings
+.vscode/
+.idea/
+
+# Ignore other stuff
+db.sqlite3
+project_tree.txt
+.mypy_cache
+*.log
+
+# Ignore environment variables file
+.env
