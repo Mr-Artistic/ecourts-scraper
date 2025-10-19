@@ -8,7 +8,6 @@ A small, practical scraper for Indian eCourts that supports:
 
 The code is split between functions.py (core library), script.py (CLI), and app.py (Streamlit UI).
 
----
 
 ## Overall Features
 
@@ -20,7 +19,6 @@ The code is split between functions.py (core library), script.py (CLI), and app.
 
     - Streamlit UI: friendly web interface exposing the same flows (CNR form, prepare + submit captchas for cause lists, embedded previews, file browser).
 
----
 
 ## Example Usage via CLI (perfectly working)
 
@@ -33,7 +31,6 @@ The code is split between functions.py (core library), script.py (CLI), and app.
     python script.py --causelist --state "Maharashtra" --district 
     "Pune" --court-complex "Pune, Civil and Criminal Court" --court-name "1-Smt N. S. Sayyad-CIVIL JUDGE J.D. AND J.M.F.C. PMC PUNE" --date "15-10-2025" --mode selenium 
 
----
 
 ## Example Usage via Streamlit UI (bug in downloading causelist)
 
@@ -50,15 +47,12 @@ The code is split between functions.py (core library), script.py (CLI), and app.
 
     - The app can be further deployed on a VM or on a Render like service.
 
----
 
 ## Output layout (important paths)
 
     - outputs/cnr/ --> Text report and json for CNR search result.
     - outputs/causelists/ --> Json and html for downloaded causelists.
 
-
----
 
 ## Troubleshooting & tips
 
@@ -69,7 +63,6 @@ The code is split between functions.py (core library), script.py (CLI), and app.
 
     - No PDF returned: The code saves HTML fallback and attempts to parse it (parse_cause_list_html) into JSON. Check outputs/causelists for .html and .json files.
 
----
 
 ## Quick checklist before running
 
@@ -78,8 +71,6 @@ The code is split between functions.py (core library), script.py (CLI), and app.
     - For Selenium flows, ensure Chrome is installed.
     - Run either python script.py (CLI) or streamlit run app.py (UI).
 
-
----
 
 ## Future scope of improvements (and reported bugs)
 
