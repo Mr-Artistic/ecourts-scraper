@@ -6,6 +6,7 @@ Is independent and importable by script.py or app.py.
 
 # region ------------------- Chapter 1: Imports -------------------
 
+# For CLI
 import requests
 import time
 import logging
@@ -33,6 +34,16 @@ from selenium.common.exceptions import (
     NoSuchElementException,
     StaleElementReferenceException,
 )
+
+# For UI
+import builtins
+import streamlit as st
+import mimetypes
+import base64
+import shutil
+import urllib.parse
+import streamlit.components.v1 as components
+
 
 # endregion Imports
 
@@ -1807,3 +1818,1007 @@ def parse_cause_list_html(
 
 
 # endregion Causelist Functions
+
+
+# region Chapter 8: UI Functions (Streamlit)
+
+
+# Utility: Input patcher (used for cause-list)
+class InputPatcher:
+    def __init__(self, value_func):
+        self._value_func = value_func
+        self._orig_input = builtins.input
+
+    def __enter__(self):
+        builtins.input = lambda prompt="": self._value_func(prompt)
+
+    def __exit__(self, exc_type, exc, tb):
+        builtins.input = self._orig_input
+
+
+# Helper: show saved file notification
+def notify_saved_path(path: str):
+    st.info(
+        f"Files saved to `{path}`. Use the sidebar file browser to preview or download them."
+    )
+
+
+def captcha_value_provider(prompt="", fallback_key="ui_captcha_value"):
+    """
+    Provide captcha text to InputPatcher.
+    We avoid creating widgets here. The Streamlit UI should set
+    st.session_state[fallback_key] before calling InputPatcher.
+    """
+    val = ""
+    try:
+        val = st.session_state.get(fallback_key, "")  # safe even if st not yet used
+    except Exception:
+        val = ""
+    # optionally log the prompt so user sees it in the app area
+    try:
+        st.write("Library prompt:", prompt)
+    except Exception:
+        pass
+    return val or ""
+
+
+def human_size(n):
+    for unit in ["B", "KB", "MB", "GB"]:
+        if n < 1024.0:
+            return f"{n:3.1f}{unit}"
+        n /= 1024.0
+    return f"{n:.1f}TB"
+
+
+def embed_pdf_bytes(data_bytes, height=700):
+    b64 = base64.b64encode(data_bytes).decode("utf-8")
+    src = f"data:application/pdf;base64,{b64}"
+    html = f'<iframe src="{src}" width="100%" height="{height}" type="application/pdf"></iframe>'
+    components.html(html, height=height)
+
+
+def render_html_file(path_obj, height=800):
+    html_text = path_obj.read_text(encoding="utf-8", errors="ignore")
+    st.warning(
+        "Embedded HTML will render static content. Relative assets (CSS/JS) may not load."
+    )
+    components.html(html_text, height=height, scrolling=True)
+    tmp_dir = Path(".") / ".tmp_streamlit"
+    tmp_dir.mkdir(exist_ok=True)
+    dest = tmp_dir / path_obj.name
+    shutil.copy(path_obj, dest)
+    st.markdown(f"[Open this HTML in a new tab]({str(dest)})")
+
+
+def get_all_files(folder: Path):
+    return sorted(
+        [p for p in folder.rglob("*") if p.is_file()],
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+
+
+def file_browser_sidebar(root_dir="outputs"):
+    # session keys
+    if "fb_last_max_mtime" not in st.session_state:
+        st.session_state.fb_last_max_mtime = 0.0
+    if "fb_selected_relpath" not in st.session_state:
+        st.session_state.fb_selected_relpath = None
+
+    sidebar = st.sidebar
+    sidebar.header("Outputs — file browser")
+
+    root_path = Path(root_dir)
+    if not root_path.exists():
+        sidebar.warning(f"Root folder `{root_dir}` does not exist. Run scraper first.")
+        return
+
+    # Subfolder selection
+    subfolders = ["/"] + sorted([p.name for p in root_path.iterdir() if p.is_dir()])
+    chosen_subfolder = sidebar.selectbox("Subfolder", options=subfolders, index=0)
+    folder = root_path if chosen_subfolder == "/" else root_path / chosen_subfolder
+
+    # Gather files recursively
+    files = get_all_files(folder)
+    sidebar.write(f"Files: {len(files)} (in `{folder}`)")
+
+    # Extensions filter (safe defaults only if present)
+    exts = sorted({p.suffix.lower() for p in files if p.suffix})
+    preferred_defaults = [".jpg", ".pdf", ".html", ".json", ".txt"]
+    default_for_multiselect = [e for e in preferred_defaults if e in exts]
+    chosen_exts = sidebar.multiselect(
+        "Filter by ext (empty = all)",
+        options=exts,
+        default=default_for_multiselect,
+    )
+
+    # Search filter
+    q = sidebar.text_input("Search filename contains", value="")
+
+    # Apply filters
+    display_files = files
+    if chosen_exts:
+        display_files = [p for p in display_files if p.suffix.lower() in chosen_exts]
+    if q:
+        display_files = [p for p in display_files if q.lower() in p.name.lower()]
+
+    # Build options as POSIX relative paths (works across OSes)
+    options = [p.relative_to(folder).as_posix() for p in display_files]
+
+    if not options:
+        sidebar.info("No matching files. Try different filters or click Refresh now.")
+    else:
+        # show single Select file dropdown
+        default_idx = 0
+        if st.session_state.fb_selected_relpath in options:
+            try:
+                default_idx = options.index(st.session_state.fb_selected_relpath)
+            except ValueError:
+                default_idx = 0
+        chosen_rel = sidebar.selectbox(
+            "Select file", options=options, index=default_idx, key="fb_selectbox"
+        )
+        # store selection (POSIX string)
+        st.session_state.fb_selected_relpath = chosen_rel
+        sel_path = folder / Path(chosen_rel)  # safe on Windows/Unix
+
+        # Show file meta and actions vertically (exactly one file)
+        sidebar.markdown("---")
+        sidebar.write(f"**{chosen_rel}**")
+        sidebar.write(
+            f"{human_size(sel_path.stat().st_size)} — {time.ctime(sel_path.stat().st_mtime)}"
+        )
+
+        # Build safe keys for widgets
+        import urllib.parse
+
+        safe_rel = urllib.parse.quote_plus(chosen_rel)
+
+        # Preview button (opens preview in main area)
+        if sidebar.button("👁️ Preview", key=f"preview_{safe_rel}"):
+            # we already set fb_selected_relpath above; rerun to show preview in main area
+            st.rerun()
+        sidebar.caption("Preview opens in main area with download option.")
+
+    # Small controls & auto-refresh
+    sidebar.markdown("---")
+    sidebar.subheader("Auto-refresh")
+    auto = sidebar.checkbox(
+        "Enable auto-refresh (polling)",
+        value=False,
+        help="When enabled the page will re-run every `interval` seconds.",
+    )
+    interval = sidebar.number_input(
+        "Interval (seconds)", min_value=3, max_value=600, value=10, step=1
+    )
+    if sidebar.button("Refresh now"):
+        st.rerun()
+
+    # mtime tracking for quick-detection of new files
+    cur_max = 0.0
+    if files:
+        cur_max = max(p.stat().st_mtime for p in files)
+    if st.session_state.fb_last_max_mtime == 0.0:
+        st.session_state.fb_last_max_mtime = cur_max
+
+    if auto:
+        if cur_max > st.session_state.fb_last_max_mtime:
+            st.session_state.fb_last_max_mtime = cur_max
+            st.rerun()
+        time.sleep(interval)
+        st.rerun()
+
+    # MAIN AREA preview unchanged — preview will appear here when fb_selected_relpath is set
+    st.divider()
+    st.header("File Preview Section")
+    if (
+        "fb_selected_relpath" not in st.session_state
+        or st.session_state.fb_selected_relpath is None
+    ):
+        st.info("Select a file from the sidebar to preview.")
+        return
+
+    sel_path = folder / Path(st.session_state.fb_selected_relpath)
+    if not sel_path.exists():
+        st.error(
+            "Selected file not found (it may have been moved/deleted). Click Refresh now."
+        )
+        return
+
+    st.write("Selected:", sel_path)
+    st.write(
+        "Size:",
+        human_size(sel_path.stat().st_size),
+        " — Modified:",
+        time.ctime(sel_path.stat().st_mtime),
+    )
+
+    with open(sel_path, "rb") as f:
+        data = f.read()
+    st.download_button("⬇️ Download file", data, file_name=sel_path.name)
+
+    mime, _ = mimetypes.guess_type(str(sel_path))
+    if mime is None:
+        mime = "application/octet-stream"
+
+    if mime.startswith("image/"):
+        st.image(data, caption=sel_path.name)
+    elif mime == "application/pdf" or sel_path.suffix.lower() == ".pdf":
+        embed_pdf_bytes(data)
+    elif sel_path.suffix.lower() in [".html", ".htm"]:
+        render_html_file(sel_path)
+    elif sel_path.suffix.lower() in [".txt", ".log", ".py", ".csv", ".json"]:
+        try:
+            text = data.decode("utf-8")
+        except Exception:
+            text = str(data)
+        if sel_path.suffix.lower() == ".json":
+            try:
+                st.json(json.loads(text))
+            except Exception:
+                st.code(text)
+        else:
+            st.code(text, language="text")
+    else:
+        st.write("Preview not available. Use the Download button.")
+
+
+# endregion UI Functions
+
+
+# region ---------- Chapter 9: Causelist Helper Functions for Streamlit App ----------
+
+
+def prepare_causelist_request(
+    session: requests.Session,
+    state: str,
+    district: str,
+    court_complex: Optional[str],
+    court_name: Optional[str],
+    out_dir: str = "outputs/causelists",
+    causelist_date: Optional[str] = None,
+):
+    """
+    Phase 1: navigate and prepare payloads for Civil/Criminal, download captcha images (if shown)
+    Returns: dict {
+        'out_dir': out_dir,
+        'payload_template': {common form fields without cicri or captcha},
+        'cicri_list': ['civ','cri'],
+        'captcha_paths': {'civ': '/path/to/cap.jpg' or None, 'cri': ...},
+        'state_code': ...,
+        'court_opt': {...}
+    }
+    This function will NOT submit the cause-list. It only fetches the page(s) and saves any captcha images.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Borrow the initial page parsing code from download_entire_cause_list
+    resp = session.get(
+        CAUSE_LIST_PAGE, headers={"User-Agent": BASE_HEADERS["User-Agent"]}, timeout=30
+    )
+    resp.raise_for_status()
+    soup = make_soup(resp.text)
+
+    # parse candidate selects/options
+    states = _parse_select_options(
+        soup, ["sess_state_code", "state_code", "state", "ddl_state_code", "state_name"]
+    )
+    dists = _parse_select_options(
+        soup,
+        ["sess_dist_code", "dist_code", "district_code", "district", "ddl_dist_code"],
+    )
+    complexes = _parse_select_options(soup, ["court_complex_code", "court_complex"])
+    courts = _parse_select_options(
+        soup, ["CL_court_no", "court_name", "court_name_txt"]
+    )
+
+    # Resolve inputs to codes (re-use your _resolve_name_or_code)
+    state_opt = _resolve_name_or_code(states, state)
+    if not state_opt:
+        raise SystemExit(f"Could not resolve state '{state}'.")
+
+    dist_opt = _resolve_name_or_code(dists, district)
+    if not dist_opt:
+        raise SystemExit(f"Could not resolve district '{district}'.")
+
+    state_code = state_opt["value"]
+    dist_code = dist_opt["value"]
+
+    # POST to populate complexes/courts if needed (same as before)
+    try:
+        state_field_name = "state_code"
+        for cand in [
+            "sess_state_code",
+            "state_code",
+            "state",
+            "ddl_state_code",
+            "state_name",
+        ]:
+            el = soup.find("select", {"name": cand}) or soup.find(
+                "select", {"id": cand}
+            )
+            if el:
+                state_field_name = el.get("name") or el.get("id") or state_field_name
+                break
+        r2 = session.post(
+            CAUSE_LIST_PAGE,
+            data={state_field_name: state_code},
+            headers={"User-Agent": BASE_HEADERS["User-Agent"]},
+            timeout=20,
+        )
+        if r2.ok:
+            soup2 = make_soup(r2.text)
+            complexes = (
+                _parse_select_options(soup2, ["court_complex_code", "court_complex"])
+                or complexes
+            )
+            courts = (
+                _parse_select_options(
+                    soup2, ["CL_court_no", "court_name", "court_name_txt"]
+                )
+                or courts
+            )
+            soup = soup2
+    except Exception:
+        pass
+
+    complex_opt = _resolve_name_or_code(complexes, court_complex)
+    if not complex_opt:
+        raise SystemExit(f"Court complex '{court_complex}' not found.")
+
+    # obtain courts by posting complex if needed (reuse code)
+    try:
+        r3 = session.post(
+            CAUSE_LIST_PAGE,
+            data={
+                "state_code": state_code,
+                "dist_code": dist_code,
+                "court_complex_code": complex_opt["value"],
+            },
+            headers={"User-Agent": BASE_HEADERS["User-Agent"]},
+            timeout=20,
+        )
+        if r3.ok:
+            s3 = make_soup(r3.text)
+            courts = (
+                _parse_select_options(
+                    s3, ["CL_court_no", "court_name", "court_name_txt"]
+                )
+                or courts
+            )
+    except Exception:
+        pass
+
+    court_opt = _resolve_name_or_code(courts, court_name)
+    if not court_opt:
+        raise SystemExit(f"Court '{court_name}' not found.")
+
+    # chosen date
+    if causelist_date:
+        chosen_dt = dateparser.parse(causelist_date, dayfirst=True)
+    else:
+        chosen_dt = datetime.now()
+    today = chosen_dt.strftime("%d-%m-%Y")
+
+    # Build the common payload template (without cicri and without captcha)
+    payload_template = {
+        "state_code": state_code,
+        "dist_code": dist_code,
+        "court_complex_code": complex_opt["value"],
+        "CL_court_no": court_opt["value"],
+        "court_name_txt": court_opt["text"],
+        "causelist_date": today,
+        "est_code": "",
+    }
+
+    # Now fetch captcha images for each cicri (server might show different captchas per click)
+    captcha_paths = {}
+    for cicri in ("civ", "cri"):
+        # request the page that has captcha — often the page is same; we attempt to find securimage img in current soup
+        cap_src = None
+        for i in soup.find_all("img"):
+            src = i.get("src", "")
+            if "securimage_show" in src:
+                cap_src = src
+                break
+        cap_path = None
+        if cap_src:
+            try:
+                # make absolute url if needed
+                if not cap_src.startswith("http"):
+                    cap_url = urljoin(BASE_URL, cap_src)
+                else:
+                    cap_url = cap_src
+                # reuse session to download
+                r = session.get(cap_url, timeout=20)
+                r.raise_for_status()
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                cap_path = os.path.join(
+                    out_dir, f"captcha_{court_opt['value']}_{cicri}_{timestamp}.jpg"
+                )
+                with open(cap_path, "wb") as fh:
+                    fh.write(r.content)
+            except Exception:
+                cap_path = None
+        captcha_paths[cicri] = cap_path
+        # small pause; server may rotate captcha on actual button click; this is best-effort
+        time.sleep(0.2)
+
+    return {
+        "out_dir": out_dir,
+        "payload_template": payload_template,
+        "cicri_list": ["civ", "cri"],
+        "captcha_paths": captcha_paths,
+        "court": court_opt,
+        "date": today,
+    }
+
+
+def submit_causelist_attempt(
+    session: requests.Session,
+    payload_template: dict,
+    cicri: str,
+    captcha_value: str,
+    out_dir: str,
+    max_retries_on_popup: int = 3,
+):
+    """
+    Submit a single cicri ('civ' or 'cri') using the given payload_template and captcha value.
+    Returns saved path (pdf/html) or None.
+    """
+    payload = payload_template.copy()
+    payload["cicri"] = cicri
+    payload["cause_list_captcha_code"] = captcha_value or ""
+    attempt = 0
+    saved = None
+    while attempt < max_retries_on_popup:
+        attempt += 1
+        try:
+            resp = session.post(
+                CAUSE_LIST_SUBMIT,
+                data=payload,
+                headers={
+                    "User-Agent": BASE_HEADERS["User-Agent"],
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
+        except Exception as e:
+            time.sleep(0.6 * attempt)
+            continue
+
+        # try JSON -> pdf
+        try:
+            j = resp.json()
+            pdf_url = (
+                j.get("pdfUrl")
+                or j.get("pdf_url")
+                or j.get("cause_list_pdf")
+                or j.get("pdf")
+            )
+            if pdf_url:
+                if not pdf_url.startswith("http"):
+                    pdf_url = urljoin(BASE_URL, pdf_url)
+                outfn = os.path.join(
+                    out_dir,
+                    f"causelist_{payload_template['CL_court_no']}_{cicri}_{payload_template['causelist_date'].replace('-', '')}.pdf",
+                )
+                download_file(pdf_url, outfn)
+                saved = outfn
+                return saved
+        except Exception:
+            pass
+
+        # html path
+        sresp = make_soup(resp.text)
+        a_pdf = sresp.find("a", href=lambda h: h and h.lower().endswith(".pdf"))
+        if a_pdf:
+            pdf_url = a_pdf["href"]
+            if not pdf_url.startswith("http"):
+                pdf_url = urljoin(BASE_URL, pdf_url)
+            outfn = os.path.join(
+                out_dir,
+                f"causelist_{payload_template['CL_court_no']}_{cicri}_{payload_template['causelist_date'].replace('-', '')}.pdf",
+            )
+            try:
+                download_file(pdf_url, outfn)
+                saved = outfn
+                return saved
+            except Exception:
+                saved = None
+
+        # fallback: extract tables and save html
+        try:
+            tables = sresp.find_all("table")
+            all_tables_html = ""
+            for tbl in tables:
+                all_tables_html += str(tbl) + "\n"
+            if not all_tables_html.strip():
+                all_tables_html = (
+                    sresp.body.decode_contents() if sresp.body else resp.text
+                )
+            fn = os.path.join(
+                out_dir,
+                f"causelist_{payload_template['CL_court_no']}_{cicri}_{payload_template['causelist_date'].replace('-', '')}.html",
+            )
+            with open(fn, "w", encoding="utf-8") as fh:
+                fh.write(all_tables_html)
+            saved = fn
+            # try parse to json
+            try:
+                json_out = fn.replace(".html", ".json")
+                parse_cause_list_html(fn, json_out)
+            except Exception:
+                pass
+            return saved
+        except Exception:
+            time.sleep(0.6 * attempt)
+            continue
+
+    return saved
+
+
+# functions.py (add)
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.chrome.service import Service as ChromeService
+from urllib.parse import urljoin
+import base64
+
+from selenium.common.exceptions import (
+    ElementClickInterceptedException,
+    TimeoutException,
+    NoSuchElementException,
+)
+from selenium.webdriver.support import expected_conditions as EC
+
+from PIL import Image
+from io import BytesIO
+
+
+# -- Paste/replace the selenium_prepare_causelist function in functions.py with the block below --
+
+
+def selenium_prepare_causelist(
+    state,
+    district,
+    court_complex,
+    court_name,
+    causelist_date=None,
+    out_dir="outputs/causelists",
+    headless=False,
+    wait_timeout=30,
+):
+    """
+    Robust Selenium prepare (replacement).
+    - navigates to cause list page
+    - selects state -> district -> complex -> court (with retries & explicit change events)
+    - captures captcha images for Civil and Criminal by clicking the page buttons
+    - returns: {"cookies": [...], "captcha_paths": {"civ":path, "cri":path}, "out_dir": out_dir}
+    """
+    os.makedirs(out_dir, exist_ok=True)
+
+    options = webdriver.ChromeOptions()
+    if headless:
+        options.add_argument("--headless=new")
+        options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--window-size=1400,1200")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("useAutomationExtension", False)
+    options.add_argument("--log-level=3")
+
+    service = ChromeService(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=options)
+    wait = WebDriverWait(driver, wait_timeout)
+
+    def try_close_alerts(drv):
+        """Try to dismiss modal/popup overlays that might block interaction."""
+        try:
+            close_selectors = [
+                "button[aria-label='Close']",
+                "button.close",
+                "button.btn-close",
+                ".swal2-close",
+                ".validationError .close",
+                ".modal .close",
+            ]
+            for sel in close_selectors:
+                try:
+                    els = drv.find_elements(By.CSS_SELECTOR, sel)
+                    for e in els:
+                        try:
+                            if e.is_displayed():
+                                drv.execute_script("arguments[0].click();", e)
+                                time.sleep(0.25)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            # remove overlays by JS as last resort
+            try:
+                drv.execute_script(
+                    """
+                    Array.from(document.querySelectorAll('.modal-backdrop, .modal, .overlay, .sweet-alert, .validationError, .popup, .ui-widget-overlay')).forEach(n => { try{ n.parentNode && n.parentNode.removeChild(n);}catch(e){}});
+                    document.body && document.body.classList && document.body.classList.remove('modal-open');
+                    """
+                )
+            except Exception:
+                pass
+            time.sleep(0.2)
+        except Exception:
+            pass
+
+    def dispatch_change(el):
+        """Dispatch change event so page JS runs."""
+        try:
+            driver.execute_script(
+                "var e = document.createEvent('HTMLEvents'); e.initEvent('change', true, false); arguments[0].dispatchEvent(e);",
+                el,
+            )
+        except Exception:
+            try:
+                driver.execute_script(
+                    "arguments[0].dispatchEvent(new Event('change', {bubbles:true}));",
+                    el,
+                )
+            except Exception:
+                pass
+
+    def find_select_by_hint(hints):
+        """Return a <select> element whose name/id contains any hint; fallback to a large select."""
+        for s in driver.find_elements(By.TAG_NAME, "select"):
+            try:
+                name = (s.get_attribute("name") or "").lower()
+                _id = (s.get_attribute("id") or "").lower()
+                if any(h in name for h in hints) or any(h in _id for h in hints):
+                    return s
+            except Exception:
+                continue
+        # fallback - select with many options
+        for s in driver.find_elements(By.TAG_NAME, "select"):
+            try:
+                opts = s.find_elements(By.TAG_NAME, "option")
+                if len(opts) > 8:
+                    return s
+            except Exception:
+                continue
+        return None
+
+    def wait_for_select_options(select_el, min_options=2, timeout=15):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                opts = select_el.find_elements(By.TAG_NAME, "option")
+                valid = [
+                    o
+                    for o in opts
+                    if (o.get_attribute("value") or "").strip() not in ("", "0", None)
+                ]
+                if len(valid) >= min_options:
+                    return True
+            except Exception:
+                pass
+            try_close_alerts(driver)
+            time.sleep(0.3)
+        return False
+
+    def select_option(select_el, user_text):
+        """Select by substring of visible text, then by visible text, then by exact value."""
+        from selenium.webdriver.support.ui import Select
+
+        S = Select(select_el)
+        # substring visible text
+        for o in S.options:
+            try:
+                if user_text.strip().lower() in (o.text or "").strip().lower():
+                    S.select_by_value(o.get_attribute("value"))
+                    dispatch_change(select_el)
+                    return True
+            except Exception:
+                continue
+        # visible text exact
+        try:
+            S.select_by_visible_text(user_text)
+            dispatch_change(select_el)
+            return True
+        except Exception:
+            pass
+        # try by value exact
+        for o in S.options:
+            try:
+                if (o.get_attribute("value") or "") == str(user_text).strip():
+                    S.select_by_value(o.get_attribute("value"))
+                    dispatch_change(select_el)
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def capture_captcha_for_label(label_text, key_label):
+        """Click the Civil/Criminal button, wait for captcha img and save robustly."""
+        try_close_alerts(driver)
+        time.sleep(0.25)
+        btn = None
+        try:
+            btn = driver.find_element(
+                By.XPATH,
+                f"//button[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), '{label_text.lower()}')]",
+            )
+        except Exception:
+            try:
+                btn = driver.find_element(
+                    By.XPATH,
+                    f"//input[@type='button' and contains(translate(@value, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), '{label_text.lower()}')]",
+                )
+            except Exception:
+                btn = None
+
+        if btn:
+            try:
+                # JS click to avoid interception
+                driver.execute_script("arguments[0].click();", btn)
+            except Exception:
+                try:
+                    btn.click()
+                except Exception:
+                    pass
+
+        # wait for captcha image
+        img_el = None
+        try:
+            img_el = wait.until(
+                EC.presence_of_element_located(
+                    (
+                        By.XPATH,
+                        "//img[contains(@src,'securimage') or contains(@src,'captcha') or contains(@class,'captcha')]",
+                    )
+                )
+            )
+        except Exception:
+            try:
+                img_el = driver.find_element(
+                    By.XPATH,
+                    "//label[contains(translate(., 'CAPTCHA','captcha'),'captcha')]/following::img[1]",
+                )
+            except Exception:
+                img_el = None
+
+        if not img_el:
+            logger.warning(
+                "[selenium_prepare] ⚠️ No captcha image found after clicking %s",
+                label_text,
+            )
+            return None
+
+        ts = str(int(time.time()))
+        fname = os.path.join(out_dir, f"captcha_{key_label}_{ts}.png")
+        # try element.screenshot first
+        try:
+            img_el.screenshot(fname)
+            logger.info("[selenium_prepare] ✓ Saved %s captcha: %s", label_text, fname)
+            return fname
+        except Exception:
+            try:
+                png = driver.get_screenshot_as_png()
+                im = Image.open(BytesIO(png))
+                rect = driver.execute_script(
+                    "var r = arguments[0].getBoundingClientRect(); return {x: r.x, y: r.y, w: r.width, h: r.height, dpr: window.devicePixelRatio || 1};",
+                    img_el,
+                )
+                dpr = rect.get("dpr", 1) or 1
+                x = int(round(rect["x"] * dpr))
+                y = int(round(rect["y"] * dpr))
+                w = int(round(rect["w"] * dpr))
+                h = int(round(rect["h"] * dpr))
+                left = max(0, x)
+                upper = max(0, y)
+                right = min(im.size[0], left + w)
+                lower = min(im.size[1], upper + h)
+                if right <= left or lower <= upper:
+                    with open(fname, "wb") as fh:
+                        fh.write(png)
+                    logger.info(
+                        "[selenium_prepare] ✓ Saved fullpage fallback captcha: %s",
+                        fname,
+                    )
+                    return fname
+                cropped = im.crop((left, upper, right, lower))
+                cropped.save(fname)
+                logger.info(
+                    "[selenium_prepare] ✓ Saved %s captcha (cropped): %s",
+                    label_text,
+                    fname,
+                )
+                return fname
+            except Exception as e:
+                logger.warning(
+                    "[selenium_prepare] ⚠️ Failed to capture captcha image: %s", e
+                )
+                return None
+
+    cookies = []
+    captcha_paths = {"civ": None, "cri": None}
+    try:
+        # Start with explicit about:blank to avoid 'data:' initial state
+        try:
+            driver.get("about:blank")
+            time.sleep(0.15)
+        except Exception:
+            pass
+
+        driver.get(CAUSE_LIST_PAGE)
+        time.sleep(0.6)
+        try_close_alerts(driver)
+
+        # wait until at least one select exists on the real page
+        wait.until(EC.presence_of_element_located((By.TAG_NAME, "select")))
+
+        # -------- State --------
+        state_sel = find_select_by_hint(["state", "sess_state", "sess_state_code"])
+        if not state_sel:
+            logger.error("[selenium_prepare] State select not found on page.")
+            raise SystemExit("State select not found.")
+        if not select_option(state_sel, state):
+            logger.error("[selenium_prepare] Could not select state '%s'", state)
+            raise SystemExit(f"Could not select state '{state}'")
+        logger.info("[selenium_prepare] ✓ Selected state: %s", state)
+        time.sleep(0.6)
+        try_close_alerts(driver)
+
+        # -------- District --------
+        district_sel = find_select_by_hint(["dist", "district", "sess_dist"])
+        if district_sel and not wait_for_select_options(
+            district_sel, min_options=2, timeout=wait_timeout
+        ):
+            logger.warning(
+                "[selenium_prepare] ⚠️ District select not ready - retrying (increase wait_timeout if slow)"
+            )
+        district_sel = find_select_by_hint(["dist", "district", "sess_dist"])
+        if not district_sel:
+            logger.error("[selenium_prepare] District select not found.")
+            raise SystemExit("District select not found.")
+        if not select_option(district_sel, district):
+            logger.error("[selenium_prepare] Could not select district '%s'", district)
+            raise SystemExit(f"Could not select district '{district}'")
+        logger.info("[selenium_prepare] ✓ Selected dist: %s", district)
+        time.sleep(0.6)
+        try_close_alerts(driver)
+
+        # -------- Complex --------
+        complex_sel = find_select_by_hint(["complex", "court_complex", "courtcomplex"])
+        if complex_sel and not wait_for_select_options(
+            complex_sel, min_options=2, timeout=wait_timeout
+        ):
+            logger.warning("[selenium_prepare] ⚠️ Complex select not ready - continuing")
+        complex_sel = find_select_by_hint(["complex", "court_complex", "courtcomplex"])
+        if not complex_sel:
+            logger.error("[selenium_prepare] Complex select not found.")
+            raise SystemExit("Court complex select not found.")
+        if not select_option(complex_sel, court_complex):
+            logger.error(
+                "[selenium_prepare] Could not select court complex '%s'", court_complex
+            )
+            raise SystemExit(f"Could not select court complex '{court_complex}'")
+        logger.info("[selenium_prepare] ✓ Selected complex: %s", court_complex)
+        time.sleep(0.8)
+        try_close_alerts(driver)
+
+        # -------- Court select with retries --------
+        court_sel = None
+        tries = 0
+        while tries < 5:
+            court_sel = find_select_by_hint(
+                ["cl_court", "court", "CL_court_no", "court_name"]
+            )
+            if court_sel and wait_for_select_options(
+                court_sel, min_options=2, timeout=6
+            ):
+                break
+            tries += 1
+            logger.warning(
+                "[selenium_prepare] ⚠️ Court select not ready, retrying (%d/5)", tries
+            )
+            try_close_alerts(driver)
+            # re-dispatch change on complex to trigger population
+            try:
+                dispatch_change(complex_sel)
+            except Exception:
+                pass
+            time.sleep(0.6)
+        if not court_sel:
+            logger.warning(
+                "[selenium_prepare] ⚠️ Could not locate court select element (will continue and try to capture captchas anyway)."
+            )
+        else:
+            if not select_option(court_sel, court_name):
+                logger.warning(
+                    "[selenium_prepare] ⚠️ Could not select court (first attempt). Will continue and try again before each capture."
+                )
+            else:
+                logger.info("[selenium_prepare] ✓ Selected court: %s", court_name)
+
+        # set date if present
+        if causelist_date:
+            try:
+                date_input = None
+                for cand in ["causelist_date", "cause_list_date", "CauseListDate"]:
+                    try:
+                        date_input = driver.find_element(By.NAME, cand)
+                        break
+                    except Exception:
+                        pass
+                if date_input:
+                    date_input.clear()
+                    date_input.send_keys(causelist_date)
+                    dispatch_change(date_input)
+                    logger.info("[selenium_prepare] Date set: %s", causelist_date)
+            except Exception:
+                pass
+
+        # capture Civil
+        logger.info("[selenium_prepare] → Capturing Civil captcha")
+        try:
+            fresh_court_sel = find_select_by_hint(
+                ["cl_court", "court", "CL_court_no", "court_name"]
+            )
+            if fresh_court_sel:
+                select_option(fresh_court_sel, court_name)
+        except Exception:
+            pass
+        captcha_paths["civ"] = capture_captcha_for_label("Civil", "civ")
+        time.sleep(0.4)
+        try_close_alerts(driver)
+
+        # reload page and re-select so criminal captcha is fresh
+        try:
+            cur = driver.current_url
+            driver.get(cur)
+            time.sleep(0.7)
+            try_close_alerts(driver)
+            # re-select selects
+            try:
+                state_sel = find_select_by_hint(["state", "sess_state"])
+                if state_sel:
+                    select_option(state_sel, state)
+                district_sel = find_select_by_hint(["dist", "district"])
+                if district_sel:
+                    select_option(district_sel, district)
+                complex_sel = find_select_by_hint(["complex", "court_complex"])
+                if complex_sel:
+                    select_option(complex_sel, court_complex)
+                court_sel = find_select_by_hint(
+                    ["cl_court", "court", "CL_court_no", "court_name"]
+                )
+                if court_sel:
+                    select_option(court_sel, court_name)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+        logger.info("[selenium_prepare] → Capturing Criminal captcha")
+        captcha_paths["cri"] = capture_captcha_for_label("Criminal", "cri")
+        try_close_alerts(driver)
+
+        cookies = driver.get_cookies()
+        logger.info(
+            "[selenium_prepare] Preparation complete. Captchas: %s", captcha_paths
+        )
+        return {"cookies": cookies, "captcha_paths": captcha_paths, "out_dir": out_dir}
+    except Exception as e:
+        logger.exception("[selenium_prepare] Exception during prepare: %s", e)
+        raise
+    finally:
+        try:
+            driver.quit()
+        except Exception:
+            pass
+
+
+# endregion Causelist Helper Functions for Streamlit App
