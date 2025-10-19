@@ -2,9 +2,9 @@
 
 A small, practical scraper for Indian eCourts that supports:
 
-• Single-case lookup by CNR (interactive captcha + parse), and
-• Downloading cause lists (requests-based or Selenium-based flows),
-• Saving results (pdf/html/json/txt) under outputs/.
+- Single-case lookup by CNR (interactive captcha + parse).
+- Downloading cause lists (requests-based or Selenium-based flows).
+- Saving results (pdf/html/json/txt) under outputs/.
 
 The code is split between functions.py (core library), script.py (CLI), and app.py (Streamlit UI).
 
