@@ -1,3 +1,5 @@
+# app.py
+
 # region ---------- Chapter 1: Imports ----------
 
 import streamlit as st
@@ -251,6 +253,7 @@ elif tab == "Download Cause List (requests/selenium)":
                     with st.spinner(
                         "Starting Selenium prepare: opening browser and capturing captcha images..."
                     ):
+
                         # IMPORTANT: pass headless and wait_timeout from UI
                         prep = selenium_prepare_causelist(
                             state=state,

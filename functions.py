@@ -2392,15 +2392,21 @@ def selenium_prepare_causelist(
     os.makedirs(out_dir, exist_ok=True)
 
     options = webdriver.ChromeOptions()
+    # Make Chrome start predictably and try to avoid automation-detection artefacts
+    options.add_argument("--disable-extensions")
+    options.add_argument("--no-first-run")
+    options.add_argument("--no-default-browser-check")
+    options.add_argument("--homepage=about:blank")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("useAutomationExtension", False)
+    options.add_argument("--window-size=1400,1200")
+    options.add_argument("--disable-features=IsolateOrigins,site-per-process")
     if headless:
         options.add_argument("--headless=new")
         options.add_argument("--disable-gpu")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--window-size=1400,1200")
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option("useAutomationExtension", False)
-        options.add_argument("--log-level=3")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--log-level=3")
 
     service = ChromeService(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=options)
@@ -2416,6 +2422,9 @@ def selenium_prepare_causelist(
                 ".swal2-close",
                 ".validationError .close",
                 ".modal .close",
+                ".ui-dialog .ui-dialog-titlebar-close",
+                ".popup .close",
+                ".sweet-alert .cancel",
             ]
             for sel in close_selectors:
                 try:
@@ -2423,23 +2432,43 @@ def selenium_prepare_causelist(
                     for e in els:
                         try:
                             if e.is_displayed():
+                                # use JS click to avoid interception
                                 drv.execute_script("arguments[0].click();", e)
-                                time.sleep(0.25)
+                                time.sleep(0.15)
                         except Exception:
                             pass
                 except Exception:
                     pass
+
+            # try to click any visible element that looks like a dismiss 'x'
+            try:
+                xs = drv.find_elements(
+                    By.XPATH,
+                    "//button[contains(., '×') or contains(., 'X') or contains(@aria-label,'close')]",
+                )
+                for x in xs:
+                    try:
+                        if x.is_displayed():
+                            drv.execute_script("arguments[0].click();", x)
+                            time.sleep(0.12)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
             # remove overlays by JS as last resort
             try:
                 drv.execute_script(
                     """
-                    Array.from(document.querySelectorAll('.modal-backdrop, .modal, .overlay, .sweet-alert, .validationError, .popup, .ui-widget-overlay')).forEach(n => { try{ n.parentNode && n.parentNode.removeChild(n);}catch(e){}});
-                    document.body && document.body.classList && document.body.classList.remove('modal-open');
+                    var sel = ['.modal-backdrop', '.modal', '.overlay', '.sweet-alert', '.validationError', '.popup', '.ui-widget-overlay', '.swal2-container', '.swal-overlay'];
+                    sel.forEach(function(s){ Array.from(document.querySelectorAll(s)).forEach(function(n){ try{ n.parentNode && n.parentNode.removeChild(n);}catch(e){} }); });
+                    Array.from(document.querySelectorAll('[role=\"dialog\"],[role=\"alert\"]')).forEach(function(n){ try{ n.parentNode && n.parentNode.removeChild(n);}catch(e){} });
+                    if(document.body && document.body.classList){ document.body.classList.remove('modal-open'); document.body.style.overflow = ''; }
                     """
                 )
             except Exception:
                 pass
-            time.sleep(0.2)
+            time.sleep(0.18)
         except Exception:
             pass
 
@@ -2456,6 +2485,24 @@ def selenium_prepare_causelist(
                     "arguments[0].dispatchEvent(new Event('change', {bubbles:true}));",
                     el,
                 )
+            except Exception:
+                pass
+
+    def focus_and_click(el):
+        """Focus and click an element using JS (avoids some click interception issues)."""
+        try:
+            driver.execute_script(
+                "arguments[0].focus(); arguments[0].scrollIntoView({block:'center'}); arguments[0].click();",
+                el,
+            )
+            time.sleep(0.12)
+        except Exception:
+            try:
+                driver.execute_script(
+                    "arguments[0].focus(); arguments[0].scrollIntoView({block:'center'});",
+                    el,
+                )
+                time.sleep(0.07)
             except Exception:
                 pass
 
@@ -2494,7 +2541,7 @@ def selenium_prepare_causelist(
             except Exception:
                 pass
             try_close_alerts(driver)
-            time.sleep(0.3)
+            time.sleep(0.25)
         return False
 
     def select_option(select_el, user_text):
@@ -2507,14 +2554,19 @@ def selenium_prepare_causelist(
             try:
                 if user_text.strip().lower() in (o.text or "").strip().lower():
                     S.select_by_value(o.get_attribute("value"))
+                    # ensure page JS sees it
+                    focus_and_click(select_el)
                     dispatch_change(select_el)
+                    time.sleep(0.18)
                     return True
             except Exception:
                 continue
         # visible text exact
         try:
             S.select_by_visible_text(user_text)
+            focus_and_click(select_el)
             dispatch_change(select_el)
+            time.sleep(0.18)
             return True
         except Exception:
             pass
@@ -2523,7 +2575,9 @@ def selenium_prepare_causelist(
             try:
                 if (o.get_attribute("value") or "") == str(user_text).strip():
                     S.select_by_value(o.get_attribute("value"))
+                    focus_and_click(select_el)
                     dispatch_change(select_el)
+                    time.sleep(0.18)
                     return True
             except Exception:
                 continue
@@ -2661,6 +2715,7 @@ def selenium_prepare_causelist(
         try_close_alerts(driver)
 
         # -------- District --------
+        # Wait for district options to populate (JS runs after state change)
         district_sel = find_select_by_hint(["dist", "district", "sess_dist"])
         if district_sel and not wait_for_select_options(
             district_sel, min_options=2, timeout=wait_timeout
@@ -2668,13 +2723,34 @@ def selenium_prepare_causelist(
             logger.warning(
                 "[selenium_prepare] ⚠️ District select not ready - retrying (increase wait_timeout if slow)"
             )
+        # after attempts, re-find and select
         district_sel = find_select_by_hint(["dist", "district", "sess_dist"])
         if not district_sel:
             logger.error("[selenium_prepare] District select not found.")
             raise SystemExit("District select not found.")
+        # attempt several times if the options are not yet present
         if not select_option(district_sel, district):
-            logger.error("[selenium_prepare] Could not select district '%s'", district)
-            raise SystemExit(f"Could not select district '{district}'")
+            # try a few times: re-dispatch state change and try again
+            attempts = 0
+            while attempts < 4 and not select_option(district_sel, district):
+                attempts += 1
+                logger.warning(
+                    "[selenium_prepare] ⚠️ Could not select district (attempt %d). Retrying...",
+                    attempts,
+                )
+                try_close_alerts(driver)
+                try:
+                    dispatch_change(state_sel)
+                    focus_and_click(state_sel)
+                except Exception:
+                    pass
+                time.sleep(0.6)
+                district_sel = find_select_by_hint(["dist", "district", "sess_dist"])
+            if not select_option(district_sel, district):
+                logger.error(
+                    "[selenium_prepare] Could not select district '%s'", district
+                )
+                raise SystemExit(f"Could not select district '{district}'")
         logger.info("[selenium_prepare] ✓ Selected dist: %s", district)
         time.sleep(0.6)
         try_close_alerts(driver)
@@ -2689,11 +2765,29 @@ def selenium_prepare_causelist(
         if not complex_sel:
             logger.error("[selenium_prepare] Complex select not found.")
             raise SystemExit("Court complex select not found.")
+
         if not select_option(complex_sel, court_complex):
-            logger.error(
-                "[selenium_prepare] Could not select court complex '%s'", court_complex
-            )
-            raise SystemExit(f"Could not select court complex '{court_complex}'")
+            # Do a few retries while trying to re-trigger complex population
+            attempts = 0
+            while attempts < 4 and not select_option(complex_sel, court_complex):
+                attempts += 1
+                logger.warning(
+                    "[selenium_prepare] ⚠️ Could not select court complex (attempt %d). Retrying...",
+                    attempts,
+                )
+                try_close_alerts(driver)
+                try:
+                    dispatch_change(district_sel)
+                    focus_and_click(district_sel)
+                except Exception:
+                    pass
+                time.sleep(0.6)
+            if not select_option(complex_sel, court_complex):
+                logger.error(
+                    "[selenium_prepare] Could not select court complex '%s'",
+                    court_complex,
+                )
+                raise SystemExit(f"Court complex '{court_complex}' not found.")
         logger.info("[selenium_prepare] ✓ Selected complex: %s", court_complex)
         time.sleep(0.8)
         try_close_alerts(driver)
@@ -2701,7 +2795,7 @@ def selenium_prepare_causelist(
         # -------- Court Name --------
         court_sel = None
         tries = 0
-        while tries < 5:
+        while tries < 6:
             court_sel = find_select_by_hint(
                 ["cl_court", "court", "CL_court_no", "court_name"]
             )
@@ -2711,15 +2805,17 @@ def selenium_prepare_causelist(
                 break
             tries += 1
             logger.warning(
-                "[selenium_prepare] ⚠️ Court select not ready, retrying (%d/5)", tries
+                "[selenium_prepare] ⚠️ Court select not ready, retrying (%d/6)", tries
             )
             try_close_alerts(driver)
-            # re-dispatch change on complex to trigger population
+            # re-dispatch complex change and focus/click to force page JS
             try:
                 dispatch_change(complex_sel)
+                focus_and_click(complex_sel)
             except Exception:
                 pass
-            time.sleep(0.6)
+            time.sleep(0.7)
+
         if not court_sel:
             logger.warning(
                 "[selenium_prepare] ⚠️ Could not locate court select element (will continue and try to capture captchas anyway)."

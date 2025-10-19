@@ -22,7 +22,7 @@ The code is split between functions.py (core library), script.py (CLI), and app.
 
 ---
 
-## Example Usage via CLI
+## Example Usage via CLI (perfectly working)
 
     ### For CNR search
 
@@ -35,16 +35,16 @@ The code is split between functions.py (core library), script.py (CLI), and app.
 
 ---
 
-## Example Usage via GUI (Streamlit App)
+## Example Usage via Streamlit UI (bug in downloading causelist)
 
     - streamlit run app.py
 
     - Open the URL shown by Streamlit (usually http://localhost:8501). 
     The app provides two tabs:
 
-    CNR lookup: Fetch captcha → enter captcha → Submit → parsed JSON + downloadable text report are saved to outputs/cnr.
+    --> CNR lookup: Fetch captcha → enter captcha → Submit → parsed JSON + downloadable text report are saved to outputs/cnr.
 
-    Download Cause List: Choose selenium mode (recommended), fill state/district/complex/court, click Run Download Script (Prepare), then solve Civil and Criminal captchas shown and Submit to download cause-lists to outputs/causelists. 
+    --> Download Cause List: Choose selenium mode (recommended), fill state/district/complex/court, click Run Download Script (Prepare), then solve Civil and Criminal captchas shown and Submit to download cause-lists to outputs/causelists. Plese refer "Future scope of improvements" section ahead.
     
     - The app includes an outputs file browser and previewer in the sidebar.
 
@@ -54,9 +54,8 @@ The code is split between functions.py (core library), script.py (CLI), and app.
 
 ## Output layout (important paths)
 
-    - outputs/cnr/ --> per-CNR JSON & <cnr>_report.txt. (CNR parse + generate_text_report).
-
-    - outputs/causelists/ --> downloaded causelist PDFs, HTML fallbacks, and parsed JSON created by parse_cause_list_html.
+    - outputs/cnr/ --> Text report and json for CNR search result.
+    - outputs/causelists/ --> Json and html for downloaded causelists.
 
 
 ---
@@ -82,8 +81,10 @@ The code is split between functions.py (core library), script.py (CLI), and app.
 
 ---
 
-## Future scope of improvements
+## Future scope of improvements (and reported bugs)
 
+    - The code for CNR search using Streamlit UI is working fine, however, the code for Download Causelist is having a bug where the fields do not get populated in the selenium browser. However, using the same feature via CLI command works totally fine.
+    
     - Captchas can be auto solved using pytesseract OCR.
     However, this is not recommended due to website's security policies.
 
