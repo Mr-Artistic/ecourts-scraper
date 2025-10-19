@@ -45,6 +45,19 @@ import urllib.parse
 import streamlit.components.v1 as components
 
 
+# For Streamlit Helper
+
+from selenium.webdriver.chrome.service import Service as ChromeService
+from selenium.common.exceptions import (
+    ElementClickInterceptedException,
+    TimeoutException,
+    NoSuchElementException,
+)
+
+from PIL import Image
+from io import BytesIO
+
+
 # endregion Imports
 
 
@@ -2008,7 +2021,7 @@ def file_browser_sidebar(root_dir="outputs"):
         time.sleep(interval)
         st.rerun()
 
-    # MAIN AREA preview unchanged — preview will appear here when fb_selected_relpath is set
+    # MAIN AREA — preview will appear here when fb_selected_relpath is set
     st.divider()
     st.header("File Preview Section")
     if (
@@ -2124,7 +2137,7 @@ def prepare_causelist_request(
     state_code = state_opt["value"]
     dist_code = dist_opt["value"]
 
-    # POST to populate complexes/courts if needed (same as before)
+    # POST to populate complexes/courts if needed
     try:
         state_field_name = "state_code"
         for cand in [
@@ -2166,7 +2179,7 @@ def prepare_causelist_request(
     if not complex_opt:
         raise SystemExit(f"Court complex '{court_complex}' not found.")
 
-    # obtain courts by posting complex if needed (reuse code)
+    # obtain courts by posting complex if needed
     try:
         r3 = session.post(
             CAUSE_LIST_PAGE,
@@ -2359,30 +2372,6 @@ def submit_causelist_attempt(
     return saved
 
 
-# functions.py (add)
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.chrome.service import Service as ChromeService
-from urllib.parse import urljoin
-import base64
-
-from selenium.common.exceptions import (
-    ElementClickInterceptedException,
-    TimeoutException,
-    NoSuchElementException,
-)
-from selenium.webdriver.support import expected_conditions as EC
-
-from PIL import Image
-from io import BytesIO
-
-
-# -- Paste/replace the selenium_prepare_causelist function in functions.py with the block below --
-
-
 def selenium_prepare_causelist(
     state,
     district,
@@ -2394,7 +2383,7 @@ def selenium_prepare_causelist(
     wait_timeout=30,
 ):
     """
-    Robust Selenium prepare (replacement).
+    Selenium prepare.
     - navigates to cause list page
     - selects state -> district -> complex -> court (with retries & explicit change events)
     - captures captcha images for Civil and Criminal by clicking the page buttons
@@ -2406,12 +2395,12 @@ def selenium_prepare_causelist(
     if headless:
         options.add_argument("--headless=new")
         options.add_argument("--disable-gpu")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--window-size=1400,1200")
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option("useAutomationExtension", False)
-    options.add_argument("--log-level=3")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--window-size=1400,1200")
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option("useAutomationExtension", False)
+        options.add_argument("--log-level=3")
 
     service = ChromeService(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=options)
@@ -2709,7 +2698,7 @@ def selenium_prepare_causelist(
         time.sleep(0.8)
         try_close_alerts(driver)
 
-        # -------- Court select with retries --------
+        # -------- Court Name --------
         court_sel = None
         tries = 0
         while tries < 5:

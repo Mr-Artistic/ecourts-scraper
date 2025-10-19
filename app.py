@@ -1,4 +1,5 @@
-# app.py
+# region ---------- Chapter 1: Imports ----------
+
 import streamlit as st
 from datetime import date
 from pathlib import Path
@@ -6,7 +7,8 @@ import requests
 import json
 import time
 
-# Import functions (from your functions.py)
+# From functions
+
 from functions import (
     _get_app_token_and_captcha,
     _post_search,
@@ -27,7 +29,12 @@ from functions import (
     selenium_prepare_causelist,
 )
 
-# Page config
+# endregion Imports
+
+
+# region ---------- Chapter 2: Page Setup ----------
+
+
 st.set_page_config(
     page_title="eCourts Scraper (Streamlit UI)",
     layout="wide",
@@ -39,6 +46,12 @@ st.markdown(
 )
 
 st.divider()
+
+# endregion Page Setup
+
+
+# region ---------- Chapter 3: Feature Selection ----------
+
 tab = st.radio(
     "Choose action",
     ["CNR lookup (single CNR)", "Download Cause List (requests/selenium)"],
@@ -48,6 +61,9 @@ CNR_OUTDIR = Path("outputs") / "cnr"
 CNR_OUTDIR.mkdir(parents=True, exist_ok=True)
 
 st.divider()
+
+# CNR Lookup Feature
+
 if tab == "CNR lookup (single CNR)":
     st.header("CNR lookup (single CNR)")
     st.markdown("Enter a CNR, fetch captcha, type the captcha, then submit the search.")
@@ -147,12 +163,13 @@ if tab == "CNR lookup (single CNR)":
                         st.exception(e)
 
 
-# ---------- CAUSELIST FLOW (kept mostly same; we will polish later) ----------
+#  Causelist Feature
+
 elif tab == "Download Cause List (requests/selenium)":
     st.header("Download Cause List (single court)")
     st.info("Note: Outputs are saved to: `outputs/causelists`")
 
-    # --- form inputs ---
+    # Form inputs
     col_a, col_b = st.columns(2)
     with col_a:
         mode = st.selectbox("Mode (selenium recommended)", ["selenium", "requests"])
@@ -360,7 +377,7 @@ elif tab == "Download Cause List (requests/selenium)":
                 st.exception(e)
                 st.error("Error during Criminal submit. See trace above.")
 
-        # show last saved result (same as before)
+        # show last saved result
         if (
             "last_causelist_saved" in st.session_state
             and st.session_state["last_causelist_saved"]
@@ -405,5 +422,10 @@ elif tab == "Download Cause List (requests/selenium)":
                 )
 
 
-# always show sidebar file browser
+# endregion Feature Selection
+
+# region ---------- Chapter 4: Render Sidebar ----------
+
 file_browser_sidebar("outputs")
+
+# endregion Render Sidebar
