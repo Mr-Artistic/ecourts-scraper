@@ -155,7 +155,7 @@ elif tab == "Download Cause List (requests/selenium)":
     # --- form inputs ---
     col_a, col_b = st.columns(2)
     with col_a:
-        mode = st.selectbox("Mode (selenium recommended)", ["requests", "selenium"])
+        mode = st.selectbox("Mode (selenium recommended)", ["selenium", "requests"])
         state = st.text_input("State (name or code)", value="")
         district = st.text_input("District (name or code)", value="")
         court_complex = st.text_input("Court Complex (visible text)", value="")
